@@ -605,15 +605,23 @@ def _refresh_nous_pool_entry(pool: CredentialPool, entry: Any, pool_api_key: str
 
 
 def _exchange_copilot_pool_entry(entry: Any, pool_api_key: str) -> str:
-    """Exchange a copilot pool entry that still carries the RAW GitHub token.
+    """Resolve a copilot pool entry's token for runtime use.
 
-    The seeder skips the exchange while copilot is merely discovered (ambient gh login, not in
-    config); here copilot IS the runtime target (`/model copilot/… --session`, `--provider copilot`,
-    delegation/cron overrides), and a raw token routes to the language-server integrator whose
-    allowlist omits enterprise-only models (400 model_not_available_for_integrator)."""
+    GHE tokens (ghu_*) carry enterprise scopes directly and talk to
+    api.enterprise.githubcopilot.com without an exchange step — the
+    exchange produces a JWT the inference endpoints reject with 400,
+    while the raw token works on both /v1/responses (GPT-5.x) and
+    /chat/completions (Claude). Fall back to the raw token when the
+    exchange does not yield a different, usable token.
+    """
     from hermes_cli.copilot_auth import get_copilot_api_token, validate_copilot_token
     if not pool_api_key or not validate_copilot_token(pool_api_key)[0]:
-        return pool_api_key  # already an exchanged API token
+        return pool_api_key  # already an exchanged API token / unusable
+    # Raw ghu_ tokens are enterprise-scoped and work directly — no exchange needed.
+    if pool_api_key.startswith("ghu_"):
+        if not entry.base_url:
+            entry.base_url = "https://api.enterprise.githubcopilot.com"
+        return pool_api_key
     api_token, enterprise_base_url = get_copilot_api_token(pool_api_key)
     if api_token == pool_api_key and not enterprise_base_url:
         from agent.credential_pool import _warn_copilot_raw_degradation_once
